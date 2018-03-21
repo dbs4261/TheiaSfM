@@ -34,10 +34,10 @@
 
 #include "theia/sfm/exif_reader.h"
 
+#include <easyexif/exif.h>
 #include <glog/logging.h>
 
 #include <algorithm>
-#include <cmath>
 #include <fstream>  // NOLINT
 #include <iostream>  // NOLINT
 #include <sstream>
@@ -102,7 +102,7 @@ void ExifReader::LoadSensorWidthDatabase() {
     // Read in the filename.
     std::string line;
     std::getline(ifs, line);
-    if (line.size() == 0) {
+    if (line.empty()) {
       break;
     }
 
@@ -122,13 +122,34 @@ bool ExifReader::ExtractEXIFMetadata(
     const std::string& image_file,
     CameraIntrinsicsPrior* camera_intrinsics_prior) const {
   CHECK_NOTNULL(camera_intrinsics_prior);
+  static const double kMinFocalLength = 1e-2;
 
-  OpenImageIO::ImageBuf image(image_file);
-  OpenImageIO::ImageSpec image_spec = image.spec();
+  // Read in the EXIF information.
+  std::streampos file_size;
+  std::ifstream file(image_file, std::ios::binary);
+  if (!file.is_open()) {
+    return false;
+  }
+
+  // Get the file size size:
+  file.seekg(0, std::ios::end);
+  file_size = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  // Read the data:
+  std::vector<unsigned char> jpeg_data(file_size);
+  file.read(reinterpret_cast<char*>(&jpeg_data[0]), file_size);
+
+  // TODO(cmsweeney): The exif parser returns a success code. We may want to log
+  // the success code.
+  easyexif::EXIFInfo exif_parser;
+  exif_parser.parseFrom(jpeg_data.data(), file_size);
+  file.close();
 
   // Set the image dimensions.
-  camera_intrinsics_prior->image_width = image_spec.width;
-  camera_intrinsics_prior->image_height = image_spec.height;
+  const FloatImage image(image_file);
+  camera_intrinsics_prior->image_width = image.Width();
+  camera_intrinsics_prior->image_height = image.Height();
 
   // Set principal point.
   camera_intrinsics_prior->principal_point.is_set = true;
@@ -137,11 +158,32 @@ bool ExifReader::ExtractEXIFMetadata(
   camera_intrinsics_prior->principal_point.value[1] =
       camera_intrinsics_prior->image_height / 2.0;
 
+  // If the exif focal length (in mm) is not set, then the focal length in
+  // pixels cannot be set.
+  if (exif_parser.FocalLength < kMinFocalLength) {
+    return true;
+  }
+
   // Attempt to set the focal length from the plane resolution, then try the
   // sensor width database if that fails.
-  if (!SetFocalLengthFromExif(image_spec, camera_intrinsics_prior) &&
-      !SetFocalLengthFromSensorDatabase(image_spec, camera_intrinsics_prior)) {
-      return true;
+  if (exif_parser.ImageWidth > 0 &&
+      exif_parser.LensInfo.FocalPlaneXResolution > 0 &&
+      exif_parser.LensInfo.FocalPlaneResolutionUnit > 1 &&
+      exif_parser.LensInfo.FocalPlaneResolutionUnit <= 5) {
+    if (!SetFocalLengthFromExif(exif_parser,
+                           image.Width(),
+                           image.Height(),
+                           camera_intrinsics_prior)) {
+      return false;
+    }
+  } else {
+    if (!SetFocalLengthFromSensorDatabase(
+        exif_parser,
+        std::max(camera_intrinsics_prior->image_width,
+                 camera_intrinsics_prior->image_height),
+        camera_intrinsics_prior)) {
+      return false;
+    }
   }
 
   // If we passed the if statement above, then we know that the focal length
@@ -149,80 +191,34 @@ bool ExifReader::ExtractEXIFMetadata(
   // focal lengths to true.
   camera_intrinsics_prior->focal_length.is_set = true;
 
-  // Set GPS latitude.
-  const OpenImageIO::ImageIOParameter* latitude =
-      image_spec.find_attribute("GPS:Latitude");
-  if (latitude != nullptr) {
+  // Set GPS latitude, longitude, and altitude.
+  if (exif_parser.GeoLocation.Latitude != 0) {
     camera_intrinsics_prior->latitude.is_set = true;
-    const float* latitude_val =
-        reinterpret_cast<const float*>(latitude->data());
     camera_intrinsics_prior->latitude.value[0] =
-        latitude_val[0] + latitude_val[1] / 60.0 + latitude_val[2] / 3600.0;
-
-    // Adjust the sign of the latitude depending on if the coordinates given
-    // were north or south.
-    const std::string north_or_south =
-        image_spec.get_string_attribute("GPS:LatitudeRef");
-    if (north_or_south == "S") {
-      camera_intrinsics_prior->longitude.value[0] *= -1.0;
-    }
+        exif_parser.GeoLocation.Latitude;
   }
-
-  // Set GPS longitude.
-  const OpenImageIO::ImageIOParameter* longitude =
-      image_spec.find_attribute("GPS:Longitude");
-  if (longitude != nullptr) {
+  if (exif_parser.GeoLocation.Longitude != 0) {
     camera_intrinsics_prior->longitude.is_set = true;
-    const float* longitude_val =
-        reinterpret_cast<const float*>(longitude->data());
     camera_intrinsics_prior->longitude.value[0] =
-        longitude_val[0] + longitude_val[1] / 60.0 + longitude_val[2] / 3600.0;
-
-    // Adjust the sign of the longitude depending on if the coordinates given
-    // were east or west.
-    const std::string east_or_west =
-        image_spec.get_string_attribute("GPS:LongitudeRef");
-    if (east_or_west == "W") {
-      camera_intrinsics_prior->longitude.value[0] *= -1.0;
-    }
+        exif_parser.GeoLocation.Longitude;
   }
-
-
-  // Set GSP altitude.
-  const OpenImageIO::ImageIOParameter* altitude =
-      image_spec.find_attribute("GPS:Altitude");
-  if (altitude != nullptr) {
+  if (exif_parser.GeoLocation.Altitude != 0) {
     camera_intrinsics_prior->altitude.is_set = true;
     camera_intrinsics_prior->altitude.value[0] =
-        image_spec.get_float_attribute("GPS:Altitude");
+        exif_parser.GeoLocation.Altitude;
   }
 
   return true;
 }
 
 bool ExifReader::SetFocalLengthFromExif(
-    const OpenImageIO::ImageSpec& image_spec,
+    const easyexif::EXIFInfo& exif_parser,
+    const double image_width,
+    const double image_height,
     CameraIntrinsicsPrior* camera_intrinsics_prior) const {
-  static const float kMinFocalLength = 1e-2;
-
-  const float exif_focal_length =
-    image_spec.get_float_attribute("Exif:FocalLength", kMinFocalLength);
-  const float focal_plane_x_resolution =
-      image_spec.get_float_attribute("Exif:FocalPlaneXResolution");
-  const float focal_plane_y_resolution =
-      image_spec.get_float_attribute("Exif:FocalPlaneYResolution");
-  const int focal_plane_resolution_unit =
-      image_spec.get_int_attribute("Exif:FocalPlaneResolutionUnit");
-
-  // Make sure the values are sane.
-  if (exif_focal_length <= kMinFocalLength || focal_plane_x_resolution <= 0.0 ||
-      focal_plane_y_resolution <= 0.0) {
-    return false;
-  }
-
   // CCD resolution is the pixels per unit resolution of the CCD.
   double ccd_resolution_units = 1.0;
-  switch (focal_plane_resolution_unit) {
+  switch (exif_parser.LensInfo.FocalPlaneResolutionUnit) {
     case 2:
       // Convert inches to mm.
       ccd_resolution_units = 25.4;
@@ -239,45 +235,36 @@ bool ExifReader::SetFocalLengthFromExif(
       ccd_resolution_units = 1.0 / 1000.0;
       break;
     default:
-      return false;
       break;
   }
 
-  // Get the ccd dimensions in mm.
-  const int exif_width = image_spec.get_int_attribute("Exif:PixelXDimension");
-  const int exif_height = image_spec.get_int_attribute("Exif:PixelYDimension");
-  const double ccd_width =
-      exif_width / (focal_plane_x_resolution / ccd_resolution_units);
-  const double ccd_height =
-      exif_height / (focal_plane_y_resolution / ccd_resolution_units);
+  const double ccd_width = exif_parser.ImageWidth /
+                           (exif_parser.LensInfo.FocalPlaneXResolution / ccd_resolution_units);
+  const double ccd_height = exif_parser.ImageHeight /
+                            (exif_parser.LensInfo.FocalPlaneYResolution / ccd_resolution_units);
 
-  const double focal_length_x =
-      exif_focal_length * image_spec.width / ccd_width;
-  const double focal_length_y =
-      exif_focal_length * image_spec.height / ccd_height;
+  const double focal_length_x = exif_parser.FocalLength * image_width / ccd_width;
+  const double focal_length_y = exif_parser.FocalLength * image_height / ccd_height;
 
   // Normalize for the image size in case the original size is different
   // than the current size.
-  const double focal_length = (focal_length_x + focal_length_y) / 2.0;
-  camera_intrinsics_prior->focal_length.value[0] = focal_length;
-  return IsValidFocalLength(focal_length);
+  camera_intrinsics_prior->focal_length.value[0] =
+      (focal_length_x + focal_length_y) / 2.0;
+  return IsValidFocalLength(camera_intrinsics_prior->focal_length.value[0]);
 }
 
 bool ExifReader::SetFocalLengthFromSensorDatabase(
-    const OpenImageIO::ImageSpec& image_spec,
+    const easyexif::EXIFInfo& exif_parser,
+    const double max_image_dimension,
     CameraIntrinsicsPrior* camera_intrinsics_prior) const {
-  const int max_image_dimension = std::max(image_spec.width, image_spec.height);
-  const float exif_focal_length =
-      image_spec.get_float_attribute("Exif:FocalLength");
+  const std::string make = ToLowercase(exif_parser.Make);
+  const std::string model = ToLowercase(exif_parser.Model);
 
-  const std::string camera_make = image_spec.get_string_attribute("Make");
-  const std::string camera_model = image_spec.get_string_attribute("Model");
   // First, try to look up just the model.
-  const std::string make_model =
-      ToLowercase(camera_make) + " " + ToLowercase(camera_model);
+  const std::string make_model = make + " " + model;
   double sensor_width = 0;
-  if (ContainsKey(sensor_width_database_, camera_model)) {
-    sensor_width = FindOrDie(sensor_width_database_, camera_model);
+  if (ContainsKey(sensor_width_database_, model)) {
+    sensor_width = FindOrDie(sensor_width_database_, model);
   } else if (ContainsKey(sensor_width_database_, make_model)) {
     sensor_width = FindOrDie(sensor_width_database_, make_model);
   }
@@ -286,10 +273,9 @@ bool ExifReader::SetFocalLengthFromSensorDatabase(
     return false;
   }
 
-  const double focal_length =
-      max_image_dimension * exif_focal_length / sensor_width;
-  camera_intrinsics_prior->focal_length.value[0] = focal_length;
-  return IsValidFocalLength(focal_length);
+  camera_intrinsics_prior->focal_length.value[0] =
+      max_image_dimension * exif_parser.FocalLength / sensor_width;
+  return IsValidFocalLength(camera_intrinsics_prior->focal_length.value[0]);
 }
 
 }  // namespace theia

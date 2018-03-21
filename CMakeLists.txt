@@ -227,6 +227,7 @@ include_directories(
   ${akaze_INCLUDE_DIR}
   ${cereal_SOURCE_DIR}
   ${cereal_SOURCE_DIR}/include
+  ${easyexif_INCLUDE_DIR}
   ${flann_SOURCE_DIR}
   ${flann_SOURCE_DIR}/src/cpp
   ${gtest_SOURCE_DIR}/include

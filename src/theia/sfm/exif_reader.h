@@ -35,7 +35,7 @@
 #ifndef THEIA_SFM_EXIF_READER_H_
 #define THEIA_SFM_EXIF_READER_H_
 
-#include <OpenImageIO/imageio.h>
+#include <easyexif/exif.h>
 #include <string>
 #include <unordered_map>
 
@@ -74,13 +74,16 @@ class ExifReader {
   // Sets the focal length from the focal plane resolution. Returns true if a
   // valid focal length is found and false otherwise.
   bool SetFocalLengthFromExif(
-      const OpenImageIO::ImageSpec& image_spec,
+      const easyexif::EXIFInfo& exif_parser,
+      double image_width,
+      double image_height,
       CameraIntrinsicsPrior* camera_intrinsics_prior) const;
 
   // Sets the focal length from a look up in the sensor width database. Returns
   // true if a valid focal length is found and false otherwise.
   bool SetFocalLengthFromSensorDatabase(
-      const OpenImageIO::ImageSpec& image_spec,
+      const easyexif::EXIFInfo& exif_parser,
+      double max_image_dimension,
       CameraIntrinsicsPrior* camera_intrinsics_prior) const;
 
   std::unordered_map<std::string, double> sensor_width_database_;

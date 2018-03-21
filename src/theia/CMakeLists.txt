@@ -208,6 +208,7 @@ set(THEIA_LIBRARY_DEPENDENCIES
   ${SUITESPARSE_LIBRARIES}
   ${OPENIMAGEIO_LIBRARIES}
   akaze
+  easyexif
   flann_cpp
   statx
   stlplus3

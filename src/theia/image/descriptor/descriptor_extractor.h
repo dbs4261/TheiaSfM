@@ -41,7 +41,8 @@
 #include "theia/util/util.h"
 
 namespace theia {
-class FloatImage;
+template <typename T> class Image;
+typedef Image<float> FloatImage;
 class Keypoint;
 
 // This interface class is meant to define all descriptor extractors. Different

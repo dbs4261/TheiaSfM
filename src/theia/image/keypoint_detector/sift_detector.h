@@ -46,7 +46,8 @@ extern "C" {
 #include "theia/util/util.h"
 
 namespace theia {
-class FloatImage;
+template <typename T> class Image;
+typedef Image<float> FloatImage;
 class Keypoint;
 
 // SIFT detector as originally proposed by David Lowe. This relies on the open

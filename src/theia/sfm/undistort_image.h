@@ -37,7 +37,8 @@
 
 namespace theia {
 class Camera;
-class FloatImage;
+template <typename T> class Image;
+typedef Image<float> FloatImage;
 class Reconstruction;
 
 // Given an image with lens distortion distortion described by the camera

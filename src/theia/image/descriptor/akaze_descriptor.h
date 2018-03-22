@@ -42,7 +42,8 @@
 
 namespace theia {
 
-class FloatImage;
+template <typename T> class Image;
+typedef Image<float> FloatImage;
 class Keypoint;
 
 // Parameters for the akaze feature extractor.

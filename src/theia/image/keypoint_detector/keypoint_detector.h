@@ -41,7 +41,8 @@
 #include "theia/util/util.h"
 
 namespace theia {
-class FloatImage;
+template <typename T> class Image;
+typedef Image<float> FloatImage;
 
 // A pure virtual class for keypoint detectors. We assume that the keypoint
 // detectors only use grayimages for now.

@@ -109,7 +109,7 @@ template <typename T> class Image {
   Eigen::Matrix<T, 3, 1> GetRowCol(const int row, const int col) const;
 
   // Get the pixel value at a non-discrete location with bilinear interpolation.
-  T BilinearInterpolate(const double x, const double y, const int c = 0) const;
+  T BilinearInterpolate(const double x, const double y, const int c) const;
 
   // Get the pixel value at a non-discrete location with bilinear interpolation.
   Eigen::Matrix<T, 3, 1> BilinearInterpolate(const double x, const double y) const;
